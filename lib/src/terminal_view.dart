@@ -583,6 +583,14 @@ class TerminalViewState extends State<TerminalView>
     _customTextEditKey.currentState?.requestKeyboard();
   }
 
+  /// Whether the keyboard this view raises is up.
+  ///
+  /// The input connection *is* the keyboard: opening it is what raised one, so
+  /// a host that keeps a line of its own under the terminal asks this to know
+  /// which of the two is holding the keyboard now.
+  bool get hasKeyboard =>
+      _customTextEditKey.currentState?.hasInputConnection ?? false;
+
   void closeKeyboard() {
     _customTextEditKey.currentState?.closeKeyboard();
   }
