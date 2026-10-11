@@ -55,6 +55,7 @@ class TerminalView extends StatefulWidget {
     this.onKeyEvent,
     this.readOnly = false,
     this.hardwareKeyboardOnly = false,
+    this.tapToShowKeyboard = true,
     this.simulateScroll = true,
     this.hideScrollBar = true,
     this.viewOffset = Offset.zero,
@@ -172,6 +173,21 @@ class TerminalView extends StatefulWidget {
   /// True if only hardware keyboard events should be used as input. This will
   /// also prevent any on-screen keyboard to be shown.
   final bool hardwareKeyboardOnly;
+
+  /// Whether a tap on the terminal brings up the software keyboard.
+  ///
+  /// On by default, which is what a terminal is: you tap it and type. Off,
+  /// the tap is only a tap — it still reports to the program, still selects,
+  /// still copies — and the only way to raise a keyboard is something that
+  /// looks like an input. Reading output is the other half of what a terminal
+  /// is for, and a keyboard over half the screen on every touch is the one
+  /// thing in the way of reading it.
+  ///
+  /// Not [hardwareKeyboardOnly]: the text input connection is left alone, so
+  /// this only decides who asks for the keyboard. There has to be something
+  /// else to ask — a composer of the terminal's own — or the keyboard simply
+  /// never comes up at all.
+  final bool tapToShowKeyboard;
 
   /// If true, when the terminal is in alternate buffer (for example running
   /// vim, man, etc), if the application does not declare that it can handle
@@ -684,7 +700,12 @@ class TerminalViewState extends State<TerminalView>
   void _onTapDown(TapDownDetails details) {
     if (_controller.selection == null) {
       if (!widget.hardwareKeyboardOnly) {
-        _customTextEditKey.currentState?.requestKeyboard();
+        if (widget.tapToShowKeyboard) {
+          _customTextEditKey.currentState?.requestKeyboard();
+        }
+        // Deliberately not the focus either: focus opens the input connection,
+        // which is what raises the keyboard. So a tap that is not going to
+        // raise one does not take it.
       } else {
         _focusNode.requestFocus();
       }
