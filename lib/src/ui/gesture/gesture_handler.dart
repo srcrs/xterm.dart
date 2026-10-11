@@ -31,6 +31,7 @@ class TerminalGestureHandler extends StatefulWidget {
     this.readOnly = false,
     this.viewOffset = Offset.zero,
     this.showToolbar = true,
+    this.suppressTapReporting = false,
     this.cursorColor = Colors.cyan,
     this.scrollController,
   });
@@ -47,6 +48,15 @@ class TerminalGestureHandler extends StatefulWidget {
   final bool readOnly;
   final Offset viewOffset;
   final bool showToolbar;
+
+  /// Leave the left button to the caller, whatever the arena decides.
+  ///
+  /// For a caller that reports the pointer itself (see
+  /// `TerminalView.rawMouseInput`): without this the same finger is reported
+  /// twice, once here and once there. Right and middle stay here — the raw
+  /// path carries only the left button, and a long press is still how the app
+  /// opens its own menu.
+  final bool suppressTapReporting;
   final Color cursorColor;
   final ScrollController? scrollController;
 
@@ -757,7 +767,11 @@ class _TerminalGestureHandlerState extends State<TerminalGestureHandler> {
     bool forceCallback = false,
   }) {
     var handled = false;
-    if (_shouldSendTapEvent && !_isNearSelection(details.localPosition)) {
+    final leftToCaller =
+        widget.suppressTapReporting && button == TerminalMouseButton.left;
+    if (!leftToCaller &&
+        _shouldSendTapEvent &&
+        !_isNearSelection(details.localPosition)) {
       handled = renderTerminal.mouseEvent(
         button,
         TerminalMouseButtonState.down,
@@ -776,7 +790,11 @@ class _TerminalGestureHandlerState extends State<TerminalGestureHandler> {
     bool forceCallback = false,
   }) {
     var handled = false;
-    if (_shouldSendTapEvent && !_isNearSelection(details.localPosition)) {
+    final leftToCaller =
+        widget.suppressTapReporting && button == TerminalMouseButton.left;
+    if (!leftToCaller &&
+        _shouldSendTapEvent &&
+        !_isNearSelection(details.localPosition)) {
       handled = renderTerminal.mouseEvent(
         button,
         TerminalMouseButtonState.up,

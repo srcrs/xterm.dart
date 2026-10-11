@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/scheduler.dart';
@@ -64,6 +65,7 @@ class TerminalView extends StatefulWidget {
     this.onCopied,
     this.onSelectAll,
     this.onPaste,
+    this.rawMouseInput = false,
   });
 
   /// The underlying terminal that this widget renders.
@@ -140,6 +142,21 @@ class TerminalView extends StatefulWidget {
   /// emit hardware delete event. Prefered on mobile platforms. [false] by
   /// default.
   final bool deleteDetection;
+
+  /// Send pointer presses straight to the terminal, outside the gesture arena.
+  ///
+  /// A TUI that draws its own tabs, panes and menus is read by tapping them,
+  /// and a tap has to arrive as a mouse report for that to work. The default
+  /// path asks the gesture arena first and only then reports, so a tap can be
+  /// consumed as a selection, a scale gesture or a long press and never reach
+  /// the program at all — which reads, on a multiplexer, as "the interface is
+  /// not clickable". [Terminal.mouseInput] stays the single place the report is
+  /// built; this only decides who asks it and when.
+  ///
+  /// Off by default: with it on, selection by tap and drag stops working, which
+  /// is the right trade for a full-screen application and the wrong one for an
+  /// ordinary shell.
+  final bool rawMouseInput;
 
   /// Shortcuts for this terminal. This has higher priority than input handler
   /// of the terminal If not provided, [defaultTerminalShortcuts] will be used.
@@ -497,6 +514,20 @@ class TerminalViewState extends State<TerminalView>
       child: child,
     );
 
+    // Outside [TerminalGestureHandler] on purpose: this reports on the raw
+    // pointer stream, so a tap that the arena would hand to a selection or a
+    // long press still reaches the program. Wrapped in [IgnorePointer] when off
+    // so the default path is untouched rather than double-reported.
+    if (widget.rawMouseInput) {
+      child = _RawMouseListener(
+        terminal: widget.terminal,
+        // Read through the owner on every event: the viewport is not mounted
+        // while this builds, and only settles once it has been laid out.
+        renderTerminal: () => laidOutRenderTerminal,
+        child: child,
+      );
+    }
+
     child = TerminalGestureHandler(
       viewOffset: widget.viewOffset,
       showToolbar: widget.showToolbar,
@@ -504,6 +535,10 @@ class TerminalViewState extends State<TerminalView>
       terminalController: _controller,
       onTapUp: _onTapUp,
       onTapDown: _onTapDown,
+      // The raw pointer path already reports this tap. Left out of the arena's
+      // reporting rather than out of its callbacks: [_onTapDown] is also what
+      // raises the keyboard, and that has to keep happening.
+      suppressTapReporting: widget.rawMouseInput,
       onSecondaryTapDown: widget.onSecondaryTapDown != null
           ? _onSecondaryTapDown
           : null,
@@ -638,6 +673,7 @@ class TerminalViewState extends State<TerminalView>
   void _onTapUp(TapUpDetails details) {
     final offset = renderTerminal.getCellOffset(details.localPosition);
     widget.onTapUp?.call(details, offset);
+    if (widget.rawMouseInput) return;
     widget.terminal.mouseInput(
       TerminalMouseButton.left,
       TerminalMouseButtonState.up,
@@ -656,6 +692,7 @@ class TerminalViewState extends State<TerminalView>
 
     _updateCursorBlink(resetVisible: true);
 
+    if (widget.rawMouseInput) return;
     widget.terminal.mouseInput(
       TerminalMouseButton.left,
       TerminalMouseButtonState.down,
@@ -955,6 +992,108 @@ class _TerminalView extends LeafRenderObjectWidget {
   }
 }
 
+/// Reports taps to the terminal straight from the pointer stream.
+///
+/// [TerminalGestureHandler] is built around the gesture arena: a tap is first
+/// offered to selection, scale and long-press recognisers, and only what they
+/// leave over reaches [Terminal.mouseInput]. That is the right default for a
+/// shell, and the wrong one for a full-screen program that draws its own tabs
+/// and panes — there, the tap *is* the click, and losing it to a selection
+/// means the interface looks dead.
+///
+/// So this listens to [PointerDownEvent]/[PointerUpEvent] directly and asks
+/// [Terminal.mouseInput] the moment they arrive. The report itself is still
+/// built by [Terminal.mouseInput], which is what decides whether the program
+/// asked for mouse events at all and which encoding to use.
+class _RawMouseListener extends StatefulWidget {
+  const _RawMouseListener({
+    required this.terminal,
+    required this.renderTerminal,
+    required this.child,
+  });
+
+  final Terminal terminal;
+
+  /// The laid-out viewport, or null before the first frame that has one.
+  final RenderTerminal? Function() renderTerminal;
+
+  final Widget child;
+
+  @override
+  State<_RawMouseListener> createState() => _RawMouseListenerState();
+}
+
+class _RawMouseListenerState extends State<_RawMouseListener> {
+  int _activePointers = 0;
+  Offset? _lastLocal;
+
+  @override
+  Widget build(BuildContext context) {
+    return Listener(
+      // `deferToChild` would drop every event wherever the child has no
+      // recogniser of its own; the whole point here is to hear the pointer
+      // either way.
+      behavior: HitTestBehavior.translucent,
+      onPointerDown: _onDown,
+      onPointerUp: _onUp,
+      onPointerCancel: _onCancel,
+      onPointerSignal: _onSignal,
+      child: widget.child,
+    );
+  }
+
+  void _onDown(PointerDownEvent event) {
+    _activePointers++;
+    _lastLocal = _localOf(event);
+    _report(TerminalMouseButton.left, TerminalMouseButtonState.down);
+  }
+
+  void _onUp(PointerUpEvent event) {
+    _activePointers = (_activePointers - 1).clamp(0, 1 << 30);
+    _lastLocal = _localOf(event);
+    _report(TerminalMouseButton.left, TerminalMouseButtonState.up);
+  }
+
+  void _onCancel(PointerCancelEvent event) {
+    if (_activePointers > 0) _activePointers--;
+    // The program is left holding a button down otherwise, and a TUI that
+    // waits for the release to finish a click never fires.
+    _report(TerminalMouseButton.left, TerminalMouseButtonState.up);
+  }
+
+  void _onSignal(PointerSignalEvent event) {
+    if (event is! PointerScrollEvent) return;
+    // A wheel is two reports: whichever button this platform calls up/down.
+    // Buttons 4/5 in X11 terms are what [TerminalMouseButton.wheelUp/Down]
+    // encode as, and both terminals that matter accept those.
+    // By the sign of the delta, the way the scroll handler reads it: a
+    // Flutter 3.47 no longer exposes the per-platform direction on this
+    // event, and the delta is the direction that survived.
+    final button = event.scrollDelta.dy < 0
+        ? TerminalMouseButton.wheelUp
+        : TerminalMouseButton.wheelDown;
+    final pos = _localOf(event);
+    final render = widget.renderTerminal();
+    if (pos == null || render == null) return;
+    final cell = render.getCellOffset(pos);
+    widget.terminal.mouseInput(button, TerminalMouseButtonState.down, cell);
+    widget.terminal.mouseInput(button, TerminalMouseButtonState.up, cell);
+  }
+
+  Offset? _localOf(PointerEvent event) {
+    final box = context.findRenderObject();
+    if (box is! RenderBox || !box.hasSize) return _lastLocal;
+    return box.globalToLocal(event.position);
+  }
+
+  void _report(TerminalMouseButton button, TerminalMouseButtonState state) {
+    final pos = _lastLocal;
+    final render = widget.renderTerminal();
+    if (pos == null || render == null) return;
+    widget.terminal.mouseInput(button, state, render.getCellOffset(pos));
+  }
+}
+
 class _TerminalScrollBehavior extends ScrollBehavior {
   const _TerminalScrollBehavior();
 
@@ -967,3 +1106,4 @@ class _TerminalScrollBehavior extends ScrollBehavior {
     return child;
   }
 }
+
