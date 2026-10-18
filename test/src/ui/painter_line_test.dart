@@ -83,21 +83,25 @@ void main() {
       expect(painted.cellsIn(1), 2);
     });
 
-    test('box drawing characters form a run', () {
+    test('box drawing is line work rather than a glyph', () {
+      // Four cells of `─`, and nothing reached a font: one rect each, drawn
+      // by the painter's own box-drawing pass. See box_drawing.dart.
       final painted = _paintLine('────');
 
-      expect(painted.glyphs, hasLength(1));
-      expect(painted.cellsIn(0), 4);
+      expect(painted.glyphs, isEmpty);
+      expect(painted.rects, hasLength(4));
     });
 
-    test('box drawing does not join an ASCII run', () {
-      // A font boundary must not land inside a paragraph: box drawing usually
-      // comes from a different fallback font than ASCII does.
+    test('box drawing neither joins nor breaks an ASCII run', () {
+      // The pair of letters is still one paragraph, and the two box cells are
+      // drawn as line work beside it, each at its own column. A font boundary
+      // cannot land inside a paragraph, which is the point either way: box
+      // drawing used to be a class of its own for exactly this.
       final painted = _paintLine('ab──');
 
-      expect(painted.glyphs, hasLength(2));
+      expect(painted.glyphs, hasLength(1));
       expect(painted.cellsIn(0), 2);
-      expect(painted.cellsIn(1), 2);
+      expect(painted.rects, hasLength(2));
     });
 
     test('a space does not break an underlined run', () {

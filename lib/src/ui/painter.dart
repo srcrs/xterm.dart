@@ -3,6 +3,7 @@ import 'dart:typed_data';
 import 'package:flutter/painting.dart';
 
 import 'package:flutter/rendering.dart';
+import 'package:xterm/src/ui/box_drawing.dart';
 import 'package:xterm/src/ui/char_metrics.dart';
 import 'package:xterm/src/ui/glyph_atlas.dart';
 import 'package:xterm/src/ui/palette_builder.dart';
@@ -146,17 +147,18 @@ class TerminalPainter {
   /// character can land in a different column than it would have.
   static const _gridTolerance = 0.5;
 
-  /// Characters that may be drawn as part of a run.
+  /// Characters that may be drawn as part of a run: ASCII printable, and
+  /// nothing else.
   ///
-  /// Two classes rather than one range because box drawing and block elements
-  /// commonly come from a different fallback font than ASCII does. Both are one
-  /// column wide and uniformly advanced in a terminal font, but keeping a run
-  /// inside one class keeps a font boundary out of the middle of a paragraph,
-  /// where the second font's metrics would move everything after it. It also
-  /// keeps [_uncoalescableKinds] from writing off ASCII because a fallback
-  /// font's box drawing did not measure up.
+  /// Box drawing used to join a run of its own. It is line work now — see
+  /// [paintBoxDrawing] — which is both what keeps a border continuous and
+  /// what keeps a fallback font's idea of the grid out of the paragraph a
+  /// neighbouring run is laid out as.
   static const _classAscii = 0;
-  static const _classBoxDrawing = 1;
+
+  /// The box-drawing cells of the line being painted, as `(column, code
+  /// point, colour)`. [_paintBoxCells] draws them once the glyphs are down.
+  final _boxCells = <(int, int, int)>[];
 
   /// The state of the run [_paintForegrounds] is accumulating. `-1` for none.
   var _runStart = -1;
@@ -306,6 +308,10 @@ class TerminalPainter {
     _paintBackgrounds(canvas, offset, line, reverseDisplay);
     _paintForegrounds(canvas, offset, line, reverseDisplay);
     _flushSprites(canvas);
+    // After the glyphs, because [_paintForegrounds] left the box-drawing cells
+    // of the line to this pass and the sprite batch is issued at the end of
+    // the last of them.
+    _paintBoxCells(canvas, offset);
   }
 
   /// Fills each maximal span of cells sharing a background colour with one
@@ -396,6 +402,7 @@ class TerminalPainter {
     BufferLine line,
     bool reverseDisplay,
   ) {
+    _boxCells.clear();
     for (var i = 0; i < line.length; i++) {
       // As in [_paintBackgrounds], the fields are read one at a time rather
       // than through a CellData.
@@ -415,6 +422,15 @@ class TerminalPainter {
         inverse ? line.getBackground(i) : line.getForeground(i),
         inverse,
       );
+
+      // A box-drawing character is line work rather than a glyph, and the
+      // line's own pass draws it once the glyphs are down. See
+      // [paintBoxDrawing].
+      if (isBoxDrawingRendered(charCode)) {
+        _flushRun(canvas, offset);
+        _boxCells.add((i, charCode, argb));
+        continue;
+      }
 
       // A cluster is drawn on its own: its glyph is composed from more than one
       // code point and need not advance by one cell, so a run cannot hold it.
@@ -525,6 +541,29 @@ class TerminalPainter {
     canvas.drawParagraph(paragraph, offset);
   }
 
+  /// Draws the line's box-drawing cells, which [_paintForegrounds] collected
+  /// rather than gave to a font. See [paintBoxDrawing].
+  void _paintBoxCells(Canvas canvas, Offset offset) {
+    if (_boxCells.isEmpty) return;
+
+    for (final (column, codePoint, argb) in _boxCells) {
+      paintBoxDrawing(
+        canvas,
+        Rect.fromLTWH(
+          offset.dx + column * _cellSize.width,
+          offset.dy,
+          _cellSize.width,
+          _cellSize.height,
+        ),
+        codePoint,
+        Color(argb),
+        _devicePixelRatio,
+      );
+    }
+
+    _boxCells.clear();
+  }
+
   /// Paints the character in the cell represented by [cellData] to [canvas] at
   /// [offset].
   @pragma('vm:prefer-inline')
@@ -546,6 +585,17 @@ class TerminalPainter {
     final cluster = cellData.cluster;
     if (cluster != null) {
       _paintCluster(canvas, offset, cluster, argb, layoutFlags);
+      return;
+    }
+
+    if (isBoxDrawingRendered(charCode)) {
+      paintBoxDrawing(
+        canvas,
+        offset & _cellSize,
+        charCode,
+        Color(argb),
+        _devicePixelRatio,
+      );
       return;
     }
 
@@ -726,9 +776,6 @@ class TerminalPainter {
   @pragma('vm:prefer-inline')
   int _charClass(int charCode) {
     if (charCode >= 0x20 && charCode <= 0x7E) return _classAscii;
-    // Box Drawing and Block Elements, which is what a TUI's frames and meters
-    // are made of and so most of what is on screen while one is running.
-    if (charCode >= 0x2500 && charCode <= 0x259F) return _classBoxDrawing;
     return -1;
   }
 

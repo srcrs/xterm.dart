@@ -127,9 +127,8 @@ void main() {
     });
   });
 
-  // What the box glyph could not be asked. Every case here is one the atlas is
-  // capable of getting wrong on a real font and could not get wrong on a
-  // rectangle that exactly fills its cell.
+  // What a rectangle that exactly fills its cell could not be asked. Every
+  // case here is one the atlas is capable of getting wrong on a real font.
   group('with a real font', () {
     Future<void> sameAs(String written, List<(int, String, int)> cells) async {
       _expectSameInk(
@@ -162,19 +161,6 @@ void main() {
           family: _realFont,
           italic: true,
         ),
-      );
-    });
-
-    test('a box drawing vertical, which leaves the cell top and bottom', () {
-      // The vertical half of the same claim, and the case that makes it
-      // necessary rather than tidy. A box drawing character overflows its line
-      // box on purpose, because that is the only way `\u2502` joins up with the
-      // one on the row below. Measured against this font's cell of 7.6 by 16:
-      // three logical pixels above and two below, where a letter with an accent
-      // overflows by none at all.
-      return sameAs(
-        '\x1b[38;2;255;0;0m\u2502',
-        const [(0, '\u2502', 0xFFFF0000)],
       );
     });
 
@@ -463,8 +449,9 @@ TerminalPainter _painter(double dpr, double scale, String? family) {
 ///
 /// Without them the image is exactly one cell tall and anything drawn outside
 /// the line box falls off it in *both* renders, so a slot that clipped a glyph
-/// would compare equal to one that did not. A box drawing vertical overflows by
-/// three pixels above and two below, which is the case that needs seeing.
+/// would compare equal to one that did not. The italic `f` below reaches past
+/// its column, and eight is more than the tallest spill any of these cases
+/// makes at the ratios they use.
 ///
 /// Whole device pixels at every ratio the tests use, so it does not disturb the
 /// rounding the atlas does.
