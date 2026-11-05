@@ -1,9 +1,10 @@
+import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
-import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:xterm/src/core/buffer/cell_offset.dart';
 import 'package:xterm/src/core/buffer/range_line.dart';
 import 'package:xterm/src/terminal.dart';
+import 'package:xterm/src/terminal_view.dart';
 import 'package:xterm/src/ui/controller.dart';
 import 'package:xterm/src/ui/cursor_type.dart';
 import 'package:xterm/src/ui/pointer_input.dart';
@@ -13,6 +14,54 @@ import 'package:xterm/src/ui/themes.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+
+  testWidgets('a console that is not full has no scroll range', (tester) async {
+    final terminal = Terminal();
+    final scroll = ScrollController();
+    addTearDown(scroll.dispose);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Center(
+          child: SizedBox(
+            width: 240,
+            height: 120,
+            child: TerminalView(
+              terminal,
+              scrollController: scroll,
+              textStyle: const TerminalStyle(fontSize: 10),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    // Enough output to fill the screen and leave history behind it.
+    terminal.write(List.filled(40, 'line\r\n').join());
+    await tester.pump();
+    expect(
+      scroll.position.maxScrollExtent,
+      greaterThan(scroll.position.minScrollExtent),
+    );
+
+    // `clear` keeps the scrollback and puts the cursor back at the top. The
+    // console now shows a short screen, not a document with more below it.
+    terminal.write('\x1b[H\x1b[2J');
+    await tester.pump();
+
+    // The history is still in the buffer; it is the visible screen that has
+    // gone back to being short.
+    expect(terminal.buffer.scrollBack, greaterThan(0));
+    expect(scroll.position.maxScrollExtent, scroll.position.minScrollExtent);
+    expect(scroll.position.pixels, scroll.position.maxScrollExtent);
+
+    // And the console cannot be dragged away from that screen either.
+    final before = scroll.position.pixels;
+    await tester.drag(find.byType(TerminalView), const Offset(0, 80));
+    await tester.pump();
+    expect(scroll.position.pixels, before);
+  });
 
   test('RenderTerminal.selectBufferRange keeps exclusive end', () {
     final terminal = Terminal();

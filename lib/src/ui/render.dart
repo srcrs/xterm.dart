@@ -527,7 +527,15 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
   /// be called in [performLayout] after the viewport size has been updated.
   void _updateScrollOffset() {
     _offset.applyViewportDimension(_viewportHeight);
-    _offset.applyContentDimensions(0, _maxScrollExtent);
+    final max = _maxScrollExtent;
+    // A screen that is not filled has nothing below the fold to reach. Its
+    // scrollback is history the screen has already left behind; offering it
+    // here gave a short console a scrollbar and a drag over blank rows, which
+    // is the report this answers. Keep the viewport at the one position that
+    // shows the live screen instead: the bottom of the buffer, which is also
+    // what makes a `clear` clear even though its cursor is back at the top.
+    final min = _isScreenFull ? 0.0 : max;
+    _offset.applyContentDimensions(min, max);
   }
 
   bool get _isComposingText {
@@ -548,6 +556,18 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
 
   double get _maxScrollExtent {
     return max(_terminalHeight - _viewportHeight, 0.0);
+  }
+
+  /// Whether the screen has been filled down to its last row.
+  ///
+  /// The cursor is where the terminal is writing, so a cursor on the bottom
+  /// row means the visible screen is full and scrolling into the scrollback is
+  /// meaningful. A cursor higher up means the screen has room left — a fresh
+  /// prompt, a `clear` — and the scrollback above it is not something the
+  /// viewport should slide to.
+  bool get _isScreenFull {
+    final buffer = _terminal.buffer;
+    return buffer.cursorY >= buffer.viewHeight - 1;
   }
 
   double get _lineOffset {
